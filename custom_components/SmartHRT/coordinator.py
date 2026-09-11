@@ -545,8 +545,17 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
         l'annulation/l'attente propre lors de async_unload() - typiquement
         les sauvegardes (_save_learned_data). La tâche se retire elle-même
         de l'ensemble une fois terminée.
+
+        NOTE: `name` n'est PAS transmis à hass.async_create_task() - le mock
+        de test (tests/conftest.py: MockHass.async_create_task(self, coro))
+        n'accepte pas ce kwarg, contrairement à l'API HA réelle qui l'accepte
+        en optionnel. On garde le paramètre ici (utile pour le futur/le
+        debugging via task.get_name() une fois la tâche créée) sans le
+        transmettre, pour rester compatible avec les deux.
         """
-        task = self.hass.async_create_task(coro, name=name)
+        task = self.hass.async_create_task(coro)
+        if name and hasattr(task, "set_name"):
+            task.set_name(name)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         return task
@@ -1989,16 +1998,25 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
         # persistante (contrairement à une première tentative qui localisait
         # la valeur au niveau du validateur Pydantic - cela rendait le champ
         # stocké aware alors que `now` peut légitimement être naïf selon
-        # l'appelant, cassant la comparaison dans l'autre sens). On localise
-        # ici les DEUX opérandes localement si nécessaire : dt_util.as_local()
-        # est un no-op sûr sur une valeur déjà aware, donc ce garde fonctionne
-        # que l'appelant fournisse `now` aware (dt_util.now(), cas normal en
-        # production) ou naïf.
+        # l'appelant, cassant la comparaison dans l'autre sens).
+        #
+        # IMPORTANT: on ne localise QUE s'il y a un vrai désaccord naïf/aware
+        # entre les deux opérandes, jamais de façon inconditionnelle. Certains
+        # tests patchent tout le module dt_util (coordinator.dt_util) sans
+        # configurer .as_local, qui renvoie alors un MagicMock au lieu d'un
+        # datetime si on l'appelle sans nécessité - cassant l'arithmétique
+        # même quand les deux opérandes étaient déjà cohérents (naïfs
+        # ensemble, comme le fait le code original). Ne convertir qu'en cas
+        # de désaccord réel reproduit exactement le comportement d'origine
+        # quand les deux côtés s'accordent déjà.
         recovery_start_hour = self.data.recovery_start_hour
-        if recovery_start_hour and recovery_start_hour.tzinfo is None:
-            recovery_start_hour = dt_util.as_local(recovery_start_hour)
-        if now.tzinfo is None:
-            now = dt_util.as_local(now)
+        if recovery_start_hour is not None:
+            rsh_naive = recovery_start_hour.tzinfo is None
+            now_naive = now.tzinfo is None
+            if rsh_naive and not now_naive:
+                recovery_start_hour = dt_util.as_local(recovery_start_hour)
+            elif now_naive and not rsh_naive:
+                now = dt_util.as_local(now)
 
         # MONITORING/DETECTING_LAG valides la nuit OU si recovery_start_hour est proche
         if persisted_state in (SmartHRTState.MONITORING, SmartHRTState.DETECTING_LAG):
@@ -2177,14 +2195,19 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
         recoverycalc = self.data.recoverycalc_hour
 
         # Si recovery_start_hour est dans le futur proche → MONITORING
-        # BUGFIX (#3.4): garde tzinfo avant comparaison/soustraction avec `now`
-        # (aware). Même avec le fix du validateur Pydantic (data_model.py),
-        # on garde cette garde défensive ici en cohérence avec les autres
-        # sites de ce fichier (_setup_time_triggers, get_time_to_recovery_hours)
-        # au cas où recovery_start_hour serait affecté hors chemin validé.
+        # BUGFIX (#3.4): garde tzinfo avant comparaison/soustraction avec
+        # `now`, uniquement en cas de désaccord naïf/aware réel entre les
+        # deux opérandes (voir commentaire détaillé dans _is_state_coherent
+        # ci-dessus - une conversion inconditionnelle casse les tests qui
+        # patchent tout le module dt_util sans configurer .as_local).
         recovery_start_hour = self.data.recovery_start_hour
-        if recovery_start_hour and recovery_start_hour.tzinfo is None:
-            recovery_start_hour = dt_util.as_local(recovery_start_hour)
+        if recovery_start_hour is not None:
+            rsh_naive = recovery_start_hour.tzinfo is None
+            now_naive = now.tzinfo is None
+            if rsh_naive and not now_naive:
+                recovery_start_hour = dt_util.as_local(recovery_start_hour)
+            elif now_naive and not rsh_naive:
+                now = dt_util.as_local(now)
 
         if recovery_start_hour and recovery_start_hour > now:
             hours_until = (recovery_start_hour - now).total_seconds() / 3600
