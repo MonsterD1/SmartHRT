@@ -7,35 +7,59 @@
  * max_temp: 26       # optional, default 26 (display range only)
  */
 
-// Entity suffix mapping — change values to match your HA language
-// Current language: French
 const SMARTHRT_KEYS = {
-  sensor_state: "etat_machine",
-  sensor_temp_int: "temperature_interieure",
-  sensor_relay: "heure_de_relance",
-  sensor_time_to: "temps_avant_relance",
-  label_time_to: "Temps avant relance",
-  number_setpoint: "consigne",
-  time_stop: "heure_coupure_chauffage",
-  time_target: "heure_cible",
-  switch_enabled: "mode_chauffage_intelligent",
+  sensor_state: "machine_state",
+  sensor_temp_int: "interior_temperature",
+  sensor_relay: "recovery_start_time",
+  sensor_time_to: "time_to_recovery",
+  number_setpoint: "set_point",
+  time_stop: "heating_stop_hour",
+  time_target: "target_hour",
+  switch_enabled: "smart_heating_mode",
   mode_values: {
-    // language-neutral keys
     initializing: { label: "INIT", color: "#78909c", icon: "○" },
-    heating_on: { label: "ON", color: "#ef4444", icon: "●" },
+    heating_on: { label: "AN", color: "#ef4444", icon: "●" },
     detecting_lag: { label: "LAG", color: "#f59e0b", icon: "◐" },
     monitoring: { label: "MONITORING", color: "#3b82f6", icon: "◉" },
     recovery: { label: "BOOST", color: "#ef4444", icon: "●" },
     heating_process: { label: "BOOST", color: "#ef4444", icon: "●" },
     unknown: { label: "?", color: "#78909c", icon: "○" },
-    // French (strings.json)
-    initialisation: { label: "INIT", color: "#78909c", icon: "○" },
-    "chauffage actif": { label: "ON", color: "#ef4444", icon: "●" },
-    "détection lag": { label: "LAG", color: "#f59e0b", icon: "◐" },
-    surveillance: { label: "MONITORING", color: "#3b82f6", icon: "◉" },
-    relance: { label: "BOOST", color: "#ef4444", icon: "●" },
-    "montée en température": { label: "BOOST", color: "#ef4444", icon: "●" },
-    inconnu: { label: "?", color: "#78909c", icon: "○" },
+  },
+};
+
+const LABELS = {
+  de: {
+    time_stop: "Stop",
+    time_relay: "Start",
+    time_target: "Ziel",
+    dialog_stop: "Abschaltzeit",
+    dialog_target: "Zielzeit",
+    dialog_title: "Zeit ändern",
+    btn_cancel: "Abbrechen",
+    btn_ok: "OK",
+    time_to_label: "Zeit bis Aufheizung",
+  },
+  en: {
+    time_stop: "Stop",
+    time_relay: "Start",
+    time_target: "Target",
+    dialog_stop: "Stop time",
+    dialog_target: "Target time",
+    dialog_title: "Edit time",
+    btn_cancel: "Cancel",
+    btn_ok: "OK",
+    time_to_label: "Time to recovery",
+  },
+  fr: {
+    time_stop: "Arrêt",
+    time_relay: "Relance",
+    time_target: "Cible",
+    dialog_stop: "Heure d'arrêt",
+    dialog_target: "Heure cible",
+    dialog_title: "Modifier l'heure",
+    btn_cancel: "Annuler",
+    btn_ok: "OK",
+    time_to_label: "Temps avant relance",
   },
 };
 
@@ -125,13 +149,17 @@ class SmartHRTCard extends HTMLElement {
 
   _eid(key) {
     const suffix = SMARTHRT_KEYS[key];
-    const domain = key.startsWith("sensor")
-      ? "sensor"
-      : key.startsWith("number")
-        ? "number"
-        : key.startsWith("switch")
-          ? "switch"
-          : "time";
+    const DOMAIN_MAP = {
+      sensor_state: "sensor",
+      sensor_temp_int: "sensor",
+      sensor_relay: "sensor",
+      sensor_time_to: "sensor",
+      number_setpoint: "number",
+      time_stop: "time",
+      time_target: "time",
+      switch_enabled: "switch",
+    };
+    const domain = DOMAIN_MAP[key] || "sensor";
     return `${domain}.${this._config.prefix}_${suffix}`;
   }
   _estate(key) {
@@ -168,6 +196,13 @@ class SmartHRTCard extends HTMLElement {
     } catch (e) {
       return raw;
     }
+  }
+  _lang() {
+    const l = (this._hass?.language || "en").toLowerCase().slice(0, 2);
+    return LABELS[l] ? l : "en";
+  }
+  _label(key) {
+    return LABELS[this._lang()][key] || key;
   }
   _modeInfo(mode) {
     const info = SMARTHRT_KEYS.mode_values[(mode || "").toLowerCase()] || {
@@ -284,26 +319,26 @@ class SmartHRTCard extends HTMLElement {
         </div>
         <div class="time-row">
           <div class="time-block" id="block-stop">
-            <div class="time-block-label"><span class="emoji">⏹</span>Arrêt</div>
+            <div class="time-block-label"><span class="emoji">⏹</span>${this._label("time_stop")}</div>
             <div class="time-block-value" id="val-stop">—</div>
           </div>
           <div class="time-block readonly">
-            <div class="time-block-label"><span class="emoji">⏰</span>Relance</div>
+            <div class="time-block-label"><span class="emoji">⏰</span>${this._label("time_relay")}</div>
             <div class="time-block-value" id="val-relay">—</div>
           </div>
           <div class="time-block" id="block-target">
-            <div class="time-block-label"><span class="emoji">🎯</span>Cible</div>
+            <div class="time-block-label"><span class="emoji">🎯</span>${this._label("time_target")}</div>
             <div class="time-block-value" id="val-target">—</div>
           </div>
         </div>
       </div></ha-card>
       <div class="dialog-overlay" id="dialog-overlay">
         <div class="dialog-box">
-          <h3 id="dialog-title">Modifier l'heure</h3>
+          <h3 id="dialog-title">${this._label("dialog_title")}</h3>
           <input type="time" id="dialog-input">
           <div class="dialog-btns">
-            <button class="btn-cancel" id="dialog-cancel">Annuler</button>
-            <button class="btn-ok" id="dialog-ok">OK</button>
+            <button class="btn-cancel" id="dialog-cancel">${this._label("btn_cancel")}</button>
+            <button class="btn-ok" id="dialog-ok">${this._label("btn_ok")}</button>
           </div>
         </div>
       </div>`;
@@ -368,14 +403,14 @@ class SmartHRTCard extends HTMLElement {
     );
     r.getElementById("block-stop").addEventListener("click", () =>
       this._openDialog(
-        "Heure d'arrêt",
+        this._label("dialog_stop"),
         SMARTHRT_KEYS.time_stop,
         this._el.valStop.textContent,
       ),
     );
     r.getElementById("block-target").addEventListener("click", () =>
       this._openDialog(
-        "Heure cible",
+        this._label("dialog_target"),
         SMARTHRT_KEYS.time_target,
         this._el.valTarget.textContent,
       ),
@@ -540,7 +575,7 @@ class SmartHRTCard extends HTMLElement {
         : h > 0
           ? h + "h" + (m > 0 ? m + "min" : "")
           : m + "min";
-      this._el.timeTo.innerHTML = `<span style="font-size:0.75em;opacity:0.7;display:block">${SMARTHRT_KEYS.label_time_to}</span><span style="font-size:1.1em;font-weight:500">${timeVal}</span>`;
+      this._el.timeTo.innerHTML = `<span style="font-size:0.75em;opacity:0.7;display:block">${this._label("time_to_label")}</span><span style="font-size:1.1em;font-weight:500">${timeVal}</span>`;
     } else {
       this._el.timeTo.textContent = "";
     }
