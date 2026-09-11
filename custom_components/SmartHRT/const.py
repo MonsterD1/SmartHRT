@@ -85,6 +85,12 @@ FORECAST_HOURS = 3
 # Seuil de baisse de température pour confirmer l'arrêt réel du chauffage
 TEMP_DECREASE_THRESHOLD = 0.2  # °C
 
+# BUGFIX (#3.6): Garde-fou contre les sauts de température implausibles
+# (glitch capteur/réseau) qui corrompraient l'apprentissage RCth/RPth.
+# Un saut instantané entre deux lectures consécutives au-delà de ce seuil
+# est rejeté (valeur précédente conservée) plutôt qu'appliqué tel quel.
+MAX_PLAUSIBLE_TEMP_JUMP_C = 5.0  # °C entre deux lectures consécutives
+
 # ADR-053: Optimisation inter-saison (Snooze) et sécurisation apprentissage
 # Seuil minimum d'activation (en heures): si durée estimée <= seuil, pas de relance
 MIN_DURATION_THRESHOLD_HOURS = 0.25  # 15 minutes
