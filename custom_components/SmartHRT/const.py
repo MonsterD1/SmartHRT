@@ -95,6 +95,9 @@ TEMP_DECREASE_THRESHOLD = 0.2  # °C
 # lectures très rapprochées où le bruit/arrondi du capteur domine.
 MAX_PLAUSIBLE_TEMP_RATE_C_PER_HOUR = 5.0  # °C/h maximum plausible
 MIN_TEMP_JUMP_FLOOR_C = 1.0  # °C - écart toujours toléré quel que soit l'écart de temps
+MIN_TEMP_JUMP_FALLBACK_C = (
+    2.0  # °C - repli si timestamp manquant ou lectures simultanées
+)
 
 # ADR-053: Optimisation inter-saison (Snooze) et sécurisation apprentissage
 # Seuil minimum d'activation (en heures): si durée estimée <= seuil, pas de relance

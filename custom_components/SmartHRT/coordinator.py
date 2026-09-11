@@ -80,6 +80,7 @@ from .const import (
     TEMP_DECREASE_THRESHOLD,
     MAX_PLAUSIBLE_TEMP_RATE_C_PER_HOUR,
     MIN_TEMP_JUMP_FLOOR_C,
+    MIN_TEMP_JUMP_FALLBACK_C,
     DEFAULT_RECOVERYCALC_HOUR,
     TimerKey,
     # ADR-053: Seuils pour Snooze et sécurisation apprentissage
@@ -880,10 +881,11 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
                 self._log_prefix(),
                 len(pending),
             )
-            for task in pending:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            done, still_pending = await asyncio.wait(pending, timeout=5)
+            for task in still_pending:
+                task.cancel()
+            if still_pending:
+                await asyncio.gather(*still_pending, return_exceptions=True)
             self._background_tasks.clear()
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -938,12 +940,12 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
                 # domine le calcul de taux.
                 last_temp = self._last_interior_temp
                 last_timestamp = self._last_interior_temp_timestamp
-                now = dt_util.now()
+                reading_time = new_state.last_updated
 
                 if last_temp is not None:
                     if last_timestamp is not None:
                         elapsed_hours = (
-                            now - last_timestamp
+                            reading_time - last_timestamp
                         ).total_seconds() / 3600
                     else:
                         elapsed_hours = 0
@@ -956,7 +958,7 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
                     else:
                         # Timestamp manquant ou lectures simultanées: repli
                         # sur un seuil plat conservateur.
-                        max_allowed = 2.0
+                        max_allowed = MIN_TEMP_JUMP_FALLBACK_C
 
                     delta = abs(normalized_temp - last_temp)
                     if delta > max_allowed:
@@ -974,7 +976,7 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
                         return
 
                 self._last_interior_temp = normalized_temp
-                self._last_interior_temp_timestamp = now
+                self._last_interior_temp_timestamp = reading_time
 
                 self.data.interior_temp = normalized_temp
                 self._check_temperature_thresholds()
@@ -1931,10 +1933,8 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
         Args:
             current_time: Heure actuelle (time) - heure murale locale, dérivée
                 d'un datetime aware (dt_util.now().time()). La comparaison ne
-                porte que sur l'heure murale et ne fait aucune arithmétique de
-                date, elle est donc intrinsèquement sûre vis-à-vis du
-                changement d'heure (DST) : on ne traverse jamais de
-                transition DST à l'intérieur de cette fonction.
+                porte que sur l'heure murale (time), sans aucune arithmétique
+                de date.
             target: Heure cible du matin (ex: 06:00)
             recoverycalc: Heure de calcul du soir (ex: 23:00)
 
@@ -2036,9 +2036,7 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
             if not recovery_start_hour:
                 return False  # Pas de recovery_start_hour = incohérent
             # recovery_start_hour doit être récent (< 24h) pour être valide
-            hours_since_recovery = (
-                now - recovery_start_hour
-            ).total_seconds() / 3600
+            hours_since_recovery = (now - recovery_start_hour).total_seconds() / 3600
             if hours_since_recovery > 24:
                 return False  # État périmé
             # Valide si : recovery_start_hour <= now ET current_time < target
