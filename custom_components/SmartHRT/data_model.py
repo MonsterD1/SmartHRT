@@ -24,8 +24,6 @@ from collections import deque
 from datetime import datetime, time as dt_time
 from typing import Annotated, Any, ClassVar, Self
 
-from homeassistant.util import dt as dt_util
-
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -101,27 +99,16 @@ def _time_validator(v: Any) -> dt_time | None:
 
 
 def _datetime_validator(v: Any) -> datetime | None:
-    """Convertit une string ISO en datetime.
-
-    BUGFIX (#3.4): Toute valeur naïve (sans tzinfo) est localisée via
-    dt_util.as_local() avant d'être retournée. Auparavant, une chaîne ISO
-    sans offset (ex: restaurée depuis un stockage plus ancien, ou un
-    fromisoformat() naïf) restait naïve tout du long. Plusieurs points du
-    coordinator font `aware_datetime - this_value` (ex: recovery_start_hour
-    dans _deduce_correct_state) ; soustraire un naïf d'un aware lève
-    TypeError. Centraliser la localisation ici évite d'avoir à auditer
-    chaque site d'utilisation individuellement.
-    """
+    """Convertit une string ISO en datetime."""
     if v is None:
         return None
     if isinstance(v, datetime):
-        return dt_util.as_local(v) if v.tzinfo is None else v
+        return v
     if isinstance(v, str):
         try:
-            parsed = datetime.fromisoformat(v)
+            return datetime.fromisoformat(v)
         except ValueError:
             return None
-        return dt_util.as_local(parsed) if parsed.tzinfo is None else parsed
     return None
 
 

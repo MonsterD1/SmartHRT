@@ -78,7 +78,8 @@ from .const import (
     WIND_LOW,
     FORECAST_HOURS,
     TEMP_DECREASE_THRESHOLD,
-    MAX_PLAUSIBLE_TEMP_JUMP_C,
+    MAX_PLAUSIBLE_TEMP_RATE_C_PER_HOUR,
+    MIN_TEMP_JUMP_FLOOR_C,
     DEFAULT_RECOVERYCALC_HOUR,
     TimerKey,
     # ADR-053: Seuils pour Snooze et sécurisation apprentissage
@@ -149,6 +150,13 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
         # coordinateur (accès à self._store après unload). On garde ici un
         # ensemble de tâches vivantes, purgé automatiquement à la complétion.
         self._background_tasks: set[asyncio.Task] = set()
+        # BUGFIX (#3.6): dernier relevé intérieur ACCEPTÉ et son timestamp,
+        # utilisés pour borner le taux de variation plausible (°C/h) d'une
+        # nouvelle lecture. Distinct de self.data.interior_temp (qui n'est
+        # mis à jour qu'après acceptation) pour ne pas mélanger état
+        # persisté/exposé et bookkeeping interne de validation.
+        self._last_interior_temp: float | None = None
+        self._last_interior_temp_timestamp: datetime | None = None
         # ADR-051: Gestionnaire centralisé des timers
         self._timer_manager = TimerManager(hass)
         # ADR-004 & ADR-009: Stratégie hybride de persistance
@@ -911,27 +919,53 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
 
                 # BUGFIX (#3.6): rejeter les sauts de température implausibles
                 # (glitch capteur/réseau) qui corromperaient l'apprentissage
-                # RCth/RPth s'ils étaient appliqués tels quels. On compare à
-                # la dernière valeur connue et on ignore la mise à jour si
-                # l'écart dépasse MAX_PLAUSIBLE_TEMP_JUMP_C, en conservant la
-                # valeur précédente plutôt que de propager la valeur aberrante.
-                previous_temp = self.data.interior_temp
-                if (
-                    previous_temp is not None
-                    and abs(normalized_temp - previous_temp)
-                    > MAX_PLAUSIBLE_TEMP_JUMP_C
-                ):
-                    _LOGGER.warning(
-                        "%s Saut de température implausible ignoré: "
-                        "%.1f°C → %.1f°C (delta=%.1f°C > seuil=%.1f°C), "
-                        "valeur précédente conservée",
-                        self._log_prefix(),
-                        previous_temp,
-                        normalized_temp,
-                        abs(normalized_temp - previous_temp),
-                        MAX_PLAUSIBLE_TEMP_JUMP_C,
-                    )
-                    return
+                # RCth/RPth. Le coordinateur étant piloté par événements (pas
+                # de polling à intervalle fixe), l'écart de temps entre deux
+                # lectures est variable et propre au capteur physique - un
+                # seuil fixe en °C n'a donc pas de sens. On borne plutôt le
+                # TAUX de variation (°C/h), avec un plancher
+                # (MIN_TEMP_JUMP_FLOOR_C) pour ne pas rejeter à tort deux
+                # lectures très rapprochées où le bruit/arrondi du capteur
+                # domine le calcul de taux.
+                last_temp = self._last_interior_temp
+                last_timestamp = self._last_interior_temp_timestamp
+                now = dt_util.now()
+
+                if last_temp is not None:
+                    if last_timestamp is not None:
+                        elapsed_hours = (
+                            now - last_timestamp
+                        ).total_seconds() / 3600
+                    else:
+                        elapsed_hours = 0
+
+                    if elapsed_hours > 0:
+                        max_allowed = max(
+                            MIN_TEMP_JUMP_FLOOR_C,
+                            MAX_PLAUSIBLE_TEMP_RATE_C_PER_HOUR * elapsed_hours,
+                        )
+                    else:
+                        # Timestamp manquant ou lectures simultanées: repli
+                        # sur un seuil plat conservateur.
+                        max_allowed = 2.0
+
+                    delta = abs(normalized_temp - last_temp)
+                    if delta > max_allowed:
+                        _LOGGER.warning(
+                            "%s Saut de température implausible ignoré: "
+                            "%.1f°C → %.1f°C (delta=%.1f°C > max_allowed=%.1f°C "
+                            "sur %.2fh), valeur précédente conservée",
+                            self._log_prefix(),
+                            last_temp,
+                            normalized_temp,
+                            delta,
+                            max_allowed,
+                            elapsed_hours,
+                        )
+                        return
+
+                self._last_interior_temp = normalized_temp
+                self._last_interior_temp_timestamp = now
 
                 self.data.interior_temp = normalized_temp
                 self._check_temperature_thresholds()
@@ -1950,14 +1984,30 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
 
         is_night = self._is_night_period(current_time, target, recoverycalc)
 
+        # BUGFIX (#3.4): garde tzinfo avant toute comparaison/soustraction
+        # ci-dessous. On ne modifie PAS self.data.recovery_start_hour de façon
+        # persistante (contrairement à une première tentative qui localisait
+        # la valeur au niveau du validateur Pydantic - cela rendait le champ
+        # stocké aware alors que `now` peut légitimement être naïf selon
+        # l'appelant, cassant la comparaison dans l'autre sens). On localise
+        # ici les DEUX opérandes localement si nécessaire : dt_util.as_local()
+        # est un no-op sûr sur une valeur déjà aware, donc ce garde fonctionne
+        # que l'appelant fournisse `now` aware (dt_util.now(), cas normal en
+        # production) ou naïf.
+        recovery_start_hour = self.data.recovery_start_hour
+        if recovery_start_hour and recovery_start_hour.tzinfo is None:
+            recovery_start_hour = dt_util.as_local(recovery_start_hour)
+        if now.tzinfo is None:
+            now = dt_util.as_local(now)
+
         # MONITORING/DETECTING_LAG valides la nuit OU si recovery_start_hour est proche
         if persisted_state in (SmartHRTState.MONITORING, SmartHRTState.DETECTING_LAG):
             if is_night:
                 return True
             # Aussi valide si recovery_start_hour est dans le futur proche (< 6h)
-            if self.data.recovery_start_hour and self.data.recovery_start_hour > now:
+            if recovery_start_hour and recovery_start_hour > now:
                 hours_until_recovery = (
-                    self.data.recovery_start_hour - now
+                    recovery_start_hour - now
                 ).total_seconds() / 3600
                 if hours_until_recovery < 6:
                     return True
@@ -1965,16 +2015,16 @@ class SmartHRTCoordinator(DataUpdateCoordinator[SmartHRTData]):
 
         # RECOVERY/HEATING_PROCESS valides pendant la période de relance
         if persisted_state in (SmartHRTState.RECOVERY, SmartHRTState.HEATING_PROCESS):
-            if not self.data.recovery_start_hour:
+            if not recovery_start_hour:
                 return False  # Pas de recovery_start_hour = incohérent
             # recovery_start_hour doit être récent (< 24h) pour être valide
             hours_since_recovery = (
-                now - self.data.recovery_start_hour
+                now - recovery_start_hour
             ).total_seconds() / 3600
             if hours_since_recovery > 24:
                 return False  # État périmé
             # Valide si : recovery_start_hour <= now ET current_time < target
-            return now >= self.data.recovery_start_hour and current_time < target
+            return now >= recovery_start_hour and current_time < target
 
         # État inconnu = incohérent
         return False

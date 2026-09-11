@@ -87,9 +87,14 @@ TEMP_DECREASE_THRESHOLD = 0.2  # °C
 
 # BUGFIX (#3.6): Garde-fou contre les sauts de température implausibles
 # (glitch capteur/réseau) qui corrompraient l'apprentissage RCth/RPth.
-# Un saut instantané entre deux lectures consécutives au-delà de ce seuil
-# est rejeté (valeur précédente conservée) plutôt qu'appliqué tel quel.
-MAX_PLAUSIBLE_TEMP_JUMP_C = 5.0  # °C entre deux lectures consécutives
+# Le coordinateur n'est PAS pollé à intervalle fixe (update_interval=None) -
+# les mises à jour arrivent en push, au rythme propre du capteur physique
+# (de quelques secondes à plusieurs dizaines de minutes selon le device).
+# Un seuil fixe en °C n'a donc pas de sens : on borne plutôt le TAUX de
+# variation (°C/heure), avec un plancher pour ne pas rejeter à tort deux
+# lectures très rapprochées où le bruit/arrondi du capteur domine.
+MAX_PLAUSIBLE_TEMP_RATE_C_PER_HOUR = 5.0  # °C/h maximum plausible
+MIN_TEMP_JUMP_FLOOR_C = 1.0  # °C - écart toujours toléré quel que soit l'écart de temps
 
 # ADR-053: Optimisation inter-saison (Snooze) et sécurisation apprentissage
 # Seuil minimum d'activation (en heures): si durée estimée <= seuil, pas de relance
