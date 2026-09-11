@@ -7,18 +7,47 @@
  * max_temp: 26       # optional, default 26 (display range only)
  */
 
+// Entity suffix mapping — change values to match your HA language
+// Entity IDs are slugified from the translated entity names, so the
+// suffixes differ per language (fr/en/de). German HA installs use the
+// English entity names for this integration.
+const SUFFIX_MAP = {
+  fr: {
+    sensor_state: "etat_machine",
+    sensor_temp_int: "temperature_interieure",
+    sensor_relay: "heure_de_relance",
+    sensor_time_to: "temps_avant_relance",
+    number_setpoint: "consigne",
+    time_stop: "heure_coupure_chauffage",
+    time_target: "heure_cible",
+    switch_enabled: "mode_chauffage_intelligent",
+  },
+  en: {
+    sensor_state: "machine_state",
+    sensor_temp_int: "interior_temperature",
+    sensor_relay: "recovery_start_time",
+    sensor_time_to: "time_to_recovery",
+    number_setpoint: "set_point",
+    time_stop: "heating_stop_hour",
+    time_target: "target_hour",
+    switch_enabled: "smart_heating_mode",
+  },
+  de: {
+    sensor_state: "machine_state",
+    sensor_temp_int: "interior_temperature",
+    sensor_relay: "recovery_start_time",
+    sensor_time_to: "time_to_recovery",
+    number_setpoint: "set_point",
+    time_stop: "heating_stop_hour",
+    time_target: "target_hour",
+    switch_enabled: "smart_heating_mode",
+  },
+};
+
 const SMARTHRT_KEYS = {
-  sensor_state: "machine_state",
-  sensor_temp_int: "interior_temperature",
-  sensor_relay: "recovery_start_time",
-  sensor_time_to: "time_to_recovery",
-  number_setpoint: "set_point",
-  time_stop: "heating_stop_hour",
-  time_target: "target_hour",
-  switch_enabled: "smart_heating_mode",
   mode_values: {
     initializing: { label: "INIT", color: "#78909c", icon: "○" },
-    heating_on: { label: "AN", color: "#ef4444", icon: "●" },
+    heating_on: { label: "ON", color: "#ef4444", icon: "●" },
     detecting_lag: { label: "LAG", color: "#f59e0b", icon: "◐" },
     monitoring: { label: "MONITORING", color: "#3b82f6", icon: "◉" },
     recovery: { label: "BOOST", color: "#ef4444", icon: "●" },
@@ -148,7 +177,7 @@ class SmartHRTCard extends HTMLElement {
   }
 
   _eid(key) {
-    const suffix = SMARTHRT_KEYS[key];
+    const suffix = SUFFIX_MAP[this._lang()][key];
     const DOMAIN_MAP = {
       sensor_state: "sensor",
       sensor_temp_int: "sensor",
@@ -198,7 +227,7 @@ class SmartHRTCard extends HTMLElement {
     }
   }
   _lang() {
-    const l = (this._hass?.language || "en").toLowerCase().slice(0, 2);
+    const l = (this._hass?.config?.language || "en").toLowerCase().slice(0, 2);
     return LABELS[l] ? l : "en";
   }
   _label(key) {
@@ -404,14 +433,14 @@ class SmartHRTCard extends HTMLElement {
     r.getElementById("block-stop").addEventListener("click", () =>
       this._openDialog(
         this._label("dialog_stop"),
-        SMARTHRT_KEYS.time_stop,
+        SUFFIX_MAP[this._lang()].time_stop,
         this._el.valStop.textContent,
       ),
     );
     r.getElementById("block-target").addEventListener("click", () =>
       this._openDialog(
         this._label("dialog_target"),
-        SMARTHRT_KEYS.time_target,
+        SUFFIX_MAP[this._lang()].time_target,
         this._el.valTarget.textContent,
       ),
     );
@@ -746,9 +775,7 @@ class SmartHRTCard extends HTMLElement {
 
   get subscribedEntities() {
     if (!this._config) return [];
-    return Object.keys(SMARTHRT_KEYS)
-      .filter((k) => k !== "mode_values" && !k.startsWith("label_"))
-      .map((k) => this._eid(k));
+    return Object.keys(SUFFIX_MAP[this._lang()]).map((k) => this._eid(k));
   }
 
   static getStubConfig() {
