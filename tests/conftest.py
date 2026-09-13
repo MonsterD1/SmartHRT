@@ -102,12 +102,14 @@ class MockHass:
         """Exécute une fonction de manière synchrone pour les tests."""
         return func(*args, **kwargs)
 
-    def async_create_task(self, coro):
-        """Crée une tâche asynchrone."""
-        if asyncio.iscoroutine(coro):
-            # Pour les tests, on peut ignorer ou forcer l'exécution
-            pass
-        return MagicMock()
+    def async_create_task(self, coro, name: str | None = None):
+        """Crée une véritable asyncio.Task pour que les tests exercent
+        le comportement réel de asyncio.wait()/task.cancel() dans
+        async_unload(), au lieu d'un MagicMock inerte."""
+        task = asyncio.ensure_future(coro)
+        if name is not None and hasattr(task, "set_name"):
+            task.set_name(name)
+        return task
 
 
 class MockStates:

@@ -10,6 +10,7 @@ Ce module consolide les tests de:
 - test_integration_log_scenario.py (supprimé)
 """
 
+import asyncio
 from datetime import datetime, time as dt_time, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
@@ -142,6 +143,84 @@ class TestTriggerCleanup:
             # Tous les timers doivent être annulés
             assert coord._timer_manager.timer_count == 0
             assert coord._timer_manager.active_timers == []
+
+
+class TestAsyncUnloadBackgroundTasks:
+    """Tests pour la gestion des tâches de fond dans async_unload (BUGFIX #4.6).
+
+    MockHass.async_create_task() crée maintenant une vraie asyncio.Task
+    (au lieu d'un MagicMock inerte), ce qui permet à ces tests d'exercer
+    réellement la logique asyncio.wait(timeout=5) / task.cancel() de
+    async_unload().
+    """
+
+    @pytest.mark.asyncio
+    async def test_pending_save_task_is_awaited(self, create_coordinator):
+        """Une tâche de fond en cours doit être attendue jusqu'à sa fin,
+        pas seulement annulée."""
+        coord = await create_coordinator(initial_state=SmartHRTState.MONITORING)
+
+        completed = False
+
+        async def fake_save():
+            nonlocal completed
+            await asyncio.sleep(0.05)
+            completed = True
+
+        task = coord._create_tracked_task(fake_save())
+
+        await coord.async_unload()
+
+        assert completed is True
+        assert task.cancelled() is False
+        assert coord._background_tasks == set()
+
+    @pytest.mark.asyncio
+    async def test_slow_task_is_cancelled_after_timeout(self, create_coordinator):
+        """Une tâche qui dépasse le délai de 5s doit être annulée."""
+        coord = await create_coordinator(initial_state=SmartHRTState.MONITORING)
+
+        with patch(
+            "custom_components.SmartHRT.coordinator.asyncio.wait",
+            new_callable=AsyncMock,
+        ) as mock_wait:
+
+            async def never_finishes():
+                await asyncio.sleep(3600)
+
+            task = coord._create_tracked_task(never_finishes())
+
+            # Simule le comportement de asyncio.wait(timeout=5): la tâche
+            # est toujours en attente (still_pending) une fois le délai écoulé.
+            mock_wait.return_value = (set(), {task})
+
+            await coord.async_unload()
+
+            mock_wait.assert_awaited_once()
+            _, kwargs = mock_wait.call_args
+            assert kwargs.get("timeout") == 5
+
+        assert task.cancelled() is True
+        assert coord._background_tasks == set()
+
+    @pytest.mark.asyncio
+    async def test_fast_task_completes_without_cancellation(self, create_coordinator):
+        """Une tâche qui se termine rapidement ne doit pas être annulée."""
+        coord = await create_coordinator(initial_state=SmartHRTState.MONITORING)
+
+        result = {}
+
+        async def fast_save():
+            result["done"] = True
+
+        task = coord._create_tracked_task(fast_save())
+
+        await coord.async_unload()
+
+        assert result.get("done") is True
+        assert task.cancelled() is False
+        assert task.done() is True
+        assert coord._background_tasks == set()
 
 
 class TestRecoveryStartRescheduling:
